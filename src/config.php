@@ -1,93 +1,21 @@
 <?php
-
-
-/*
- *
- * VegaDNS - DNS Administration Tool for use with djbdns
- *
- * CREDITS:
- * Written by Bill Shupp
- * <hostmaster@shupp.org>
- *
- * LICENSE:
- * This software is distributed under the GNU General Public License
- * Copyright 2003-2016, Bill Shupp
- * see COPYING for details
- *
- */
-
-
-
-// Location of vegadns private directories (should be in ServerRoot of Apache)
-$private_dirs = '/usr/local/apache/vegadns';
-
-// Location of sessions dir
-$session_dir = "$private_dirs/sessions";
-
-// Location of smarty dirs
-$smarty->compile_dir = "$private_dirs/templates_c";
-$smarty->configs_dir = "$private_dirs/configs";
-$smarty->cache_dir = "$private_dirs/cache";
-
-
-// Mysql settings
-$mysql_host = 'localhost';
-$mysql_user = 'vegadns';
-$mysql_pass = 'secret';
-$mysql_db = 'vegadns';
-
-// Local URL
-$vegadns_url = 'http://127.0.0.1/';
-
-// Contact info used in from/to addresses of email notifactions for inactive
-// domains
-$supportname = "The VegaDNS Team";
-$supportemail = "support@example.com";
-
-// Enable IPv6 support
-$use_ipv6 = false;
-
-// Hosts allowed to access get_data
-// These are a comma delimited list of IPv4 addresses
-// Such a list could look like:
-// $trusted_hosts = '127.0.0.1,127.0.0.1,127.0.0.3';
-
-$trusted_hosts = '127.0.0.1';
-
-// Set this to 1 if you don't want to limit access to get_data
-$trusted = 0;
-
-// IP Address of the local tinydns instance.  This is the IP that will be used
-// for dns lookups on authoritative information
-$tinydns_ip = '127.0.0.1';
-
-// Records per page
-$per_page = 75;
-
-// Session timeout time.  default: 3600 (1 hour)
-$timeout = 3600;
-
-// Directory containing dnsq and dnsqr
-$dns_tools_dir = '/usr/local/bin';
-
-// Set to true if you want to store sessions in mysql rather than in files
-// (required when load balancing VegaDNS)
-$use_mysql_sessions = false;
-
-// Set this to a record name you want to query for version information
-// over a TXT record
-// $vegadns_generation_txt_record = "vegadns-generation.example.com";
-
-/////////////////////////////////////
-// NO NEED TO EDIT BELOW THIS LINE //
-/////////////////////////////////////
-
-require_once 'version.php';
-
-if(!preg_match('/.*\/index.php$/', $_SERVER['PHP_SELF'])
-    && !preg_match('/.*\/axfr_get.php$/', $_SERVER['PHP_SELF'])) {
-    header("Location:../index.php");
-    exit;
-}
-
-?>
+declare(strict_types=1);
+if (!defined('VEGADNS_INTERNAL')) { http_response_code(404); exit; }
+$env=static fn(string $key,string $default=''): string => getenv($key)===false?$default:getenv($key);
+$base=$env('VEGADNS_BASE_URL'); $parts=parse_url($base);
+if(!$parts || ($parts['scheme']??'')!=='https' || !isset($parts['host']) || isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment']) || !str_ends_with($parts['path']??'','/index.php') || preg_match('/[\x00-\x20\x7f]/',$base)) throw new RuntimeException('Configure a canonical HTTPS VEGADNS_BASE_URL ending in /index.php');
+$support=\VegaDNS\Security::email($env('VEGADNS_SUPPORT_EMAIL'));
+$list=static fn(string $key): array => array_values(array_filter(array_map('trim',explode(',',$env($key)))));
+$servers=$list('VEGADNS_DNS_SERVERS'); $proxies=$list('VEGADNS_TRUSTED_PROXIES');
+foreach(array_merge($servers,$proxies) as $ip) if(!filter_var($ip,FILTER_VALIDATE_IP)) throw new RuntimeException('Network allowlists must contain IP literals');
+$dsn=$env('VEGADNS_DSN');
+if(!str_starts_with($dsn,'mysql:') || !str_contains($dsn,'charset=utf8mb4')) throw new RuntimeException('Configure a MySQL DSN with charset=utf8mb4');
+$sessions=$env('VEGADNS_SESSIONS','files');
+if(!in_array($sessions,['files','mysql'],true)) throw new RuntimeException('Invalid session backend');
+return ['base_url'=>$base,'cookie_path'=>rtrim(dirname($parts['path']),'/').'/',
+    'dsn'=>$dsn,'db_user'=>$env('VEGADNS_DB_USER'),'db_password'=>$env('VEGADNS_DB_PASSWORD'),
+    'support_email'=>$support,'timeout'=>3600,'sessions'=>$sessions,
+    'session_dir'=>$env('VEGADNS_SESSION_DIR','/var/lib/vegadns/sessions'),
+    'transfer_dir'=>$env('VEGADNS_TRANSFER_DIR','/var/lib/vegadns/transfers'),
+    'tools'=>$env('VEGADNS_DNS_TOOLS','/usr/local/bin'),'dns_servers'=>$servers,
+    'trusted_proxies'=>$proxies,'export_token'=>$env('VEGADNS_EXPORT_TOKEN')];

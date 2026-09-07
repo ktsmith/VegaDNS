@@ -1,111 +1,91 @@
-BEFORE YOU INSTALL
+New installation
+================
 
-*   make sure php has support for mysql.  On Debian, for example, this would
-    be the php5-mysql package.
-*   make sure wget is installed (http://www.gnu.org/directory/wget.html).
-    Many distributions already have this installed.  wget is used for importing
-    via AXFR, and also for dumping the SQL records to the djbdns data file.
-    wget must be within the webserver's PATH environment
-*   make sure MySQL is installed, and that you have an account/database for
-    vegadns,  or the ability to create an account and database.  Again, many
-    distributions already have this installed.
-*   make sure djbdns (http://cr.yp.to/djbdns.html), ucspi-tcp
-    (http://cr.yp.to/ucspi-tcp.html), and  daemontools
-    (http://cr.yp.to/daemontools/install.html) are all installed.
-*   make sure you create the djbdns accounts Gtinydns and Gdnslog for later use.
+1. Install a supported, patched PHP 8.4+ (8.x) runtime with PDO MySQL, sessions and
+   filter support; MySQL 8.4/InnoDB is the deployment target. The source uses no
+   Composer packages. PDO SQLite and Python 3.9+ are needed only for local tests.
+   AXFR/query features also require operator-maintained tcpclient, axfr-get and
+   dnsq binaries. The publishing host needs curl, flock, mktemp and tinydns-data.
 
-INSTALL VegaDNS
+2. Deploy into a new, read-only application directory. Only index.php and
+   assets/app.css may be served. Configure Apache 2.4 to honor .htaccess or adapt
+   deploy/nginx.conf. Deny src, bin, tests, deploy, .git, security-review, SQL files
+   and all other source paths. Do not copy security-review into a release.
+   Use a dedicated PHP-FPM pool/account; application code must not be writable by
+   that account. Apply deploy/php.ini to the pool's runtime configuration.
 
-NOTE:   The Following steps assume your ServerRoot is /usr/local/apache, and
-        that your daemontools service directory is /service.
+3. Create a database using utf8mb4. Use a temporary migration identity with CREATE,
+   ALTER, INDEX and CRUD privileges; the web identity needs SELECT, INSERT, UPDATE
+   and DELETE only on this database. Do not grant FILE or global privileges.
+   Set these environment variables in a private service/secret configuration,
+   outside the document root. Ensure PHP-FPM explicitly receives them:
 
-        Please substitute the appropriate paths if necessary.
+     VEGADNS_BASE_URL=https://dns.example.com/index.php
+     VEGADNS_DSN=mysql:host=localhost;dbname=vegadns;charset=utf8mb4
+     VEGADNS_DB_USER=<dedicated application identity>
+     VEGADNS_DB_PASSWORD=<unique random database password>
+     VEGADNS_SUPPORT_EMAIL=dns-support@example.com
+     VEGADNS_EXPORT_TOKEN=<64 random hexadecimal characters>
+     VEGADNS_SESSIONS=files
+     VEGADNS_SESSION_DIR=/var/lib/vegadns/sessions
+     VEGADNS_TRANSFER_DIR=/var/lib/vegadns/transfers
+     VEGADNS_DNS_TOOLS=/usr/local/bin
+     VEGADNS_DNS_SERVERS=192.0.2.53,192.0.2.54
+     VEGADNS_TRUSTED_PROXIES=
 
-        Likewise, you should substitue "myserver" for your real hostname, and
-        x.x in "vegadns-x.x" with the version of VegaDNS you are using.
+   The sample IPs are documentation addresses; replace them with approved server
+   IPs. An empty DNS_SERVERS disables outbound DNS operations. Restrict network
+   egress to those addresses on UDP/TCP 53 as well. Generate the export token with
+   `php -r 'echo bin2hex(random_bytes(32)), PHP_EOL;'` and store it securely. It is
+   a service credential for all active zone data; never put it in URLs.
+   TRUSTED_PROXIES may contain only actual reverse-proxy peer IPs. The proxy must
+   overwrite X-Forwarded-Proto; the backend must be inaccessible directly.
+   Cookie path is derived from BASE_URL. A subdirectory URL is supported when the
+   webserver rules are adjusted to that prefix. All browser traffic requires HTTPS.
 
-1.  Change into your web server's DocumentRoot  like so:
+4. Create the session/transfer directories outside the document root, owned by the
+   dedicated PHP account, mode 0700. File sessions need persistent local storage;
+   select VEGADNS_SESSIONS=mysql for multiple application workers/hosts sharing DB
+   sessions. Use the same export token and configuration across those workers.
 
-    cd /usr/local/apache/htdocs/
+5. With the migration identity in the environment, run:
+     php bin/admin.php migrate
+   Create a named administrator using a private password file (mode 0600):
+     php bin/admin.php create-admin admin@example.com < /private/admin-password
+   The password must contain 12-72 bytes. Use a password manager to generate it;
+   do not put it in command-line arguments or shell history. Remove the private
+   password file using your secret-handling procedure. Switch the service to the
+   CRUD-only identity. No account is created by the web application or migration.
 
-2.  Get and unpack vegadns source:
+6. Configure PHP's mail transport and test mailbox delivery. Password reset sends
+   a one-time link, valid for 30 minutes. It never sends or immediately changes a
+   password. Exclude query strings from access/proxy/APM logs (reset links contain
+   a short-lived token); never log cookies, Authorization or POST bodies. Run
+   `php bin/admin.php cleanup` daily to prune expired security state. Sessions have
+   an absolute one-hour login lifetime and are revoked on credential/role changes.
 
-    wget www.vegadns.org/download/vegadns-current.tgz
-    tar -xzf vegadns-current.tgz
+7. Sign in and configure system SOA/NS defaults before adding production domains.
+   DOMAIN is a case-insensitive whole-label placeholder in default host/value
+   fields; it is not replaced inside a label such as mydomain. Group defaults,
+   when present, replace system defaults. Every active zone needs exactly one SOA.
+   Domains created by users/group admins start inactive; a senior admin activates
+   them. Automatic PTR records require an active reverse zone with the same owner
+   and group as the forward zone. Otherwise manage PTR in its authorized zone.
 
-3.  Setup SQL account (replace 'secret' below with your desired password):
+8. On the publishing host, store a curl config outside the webroot, mode 0600:
+     header = "Authorization: Bearer <same export token>"
+   Do not enable insecure TLS or redirects in that file. Set VEGADNS_URL to the
+   canonical HTTPS index.php URL, VEGADNS_CURL_CONFIG to that file, TINYDNS_ROOT to
+   the existing tinydns root, and TINYDNS_DATA to the absolute compiler path.
+   Run `sh update-data.sh` from cron under the account owning the tinydns root.
+   The script locks publication, downloads over verified HTTPS, rejects HTTP
+   errors/empty output, compiles in a private directory, and atomically renames the
+   new data.cdb only after compilation succeeds. It publishes one source per run.
 
-    mysqladmin -u root create vegadns -p
-    mysql -u root -e "GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER ON vegadns.* TO vegadns@localhost IDENTIFIED BY 'secret'" mysql -p
-
-4.  Create the private vegadns directories for templates, sessions in your
-    web server's ServerRoot, and have them owned by the user/group that the
-    web server runs as (nobody:nobody in this example)
-
-    mkdir -p /usr/local/apache/vegadns/templates_c
-    mkdir /usr/local/apache/vegadns/configs
-    mkdir /usr/local/apache/vegadns/cache
-    mkdir /usr/local/apache/vegadns/sessions
-
-    chown -R nobody:nobody /usr/local/apache/vegadns
-    chmod -R 770 /usr/local/apache/vegadns
-
-5.  Edit the vegadns-x.x/src/config.php file.  Make *sure* that the
-    "private_dirs" variable is set properly, as well as the MySQL account
-    information, and and also the "vegadns_url" variable.
-
-6.  Create a tinydns service on 127.0.0.1 for testing
-
-    tinydns-conf Gtinydns Gdnslog /etc/tinydns 127.0.0.1
-    ln -s /etc/tinydns /service
-
-7.  Log into VegaDNS for the first time to create the tables, and update the
-    default login information by pointing your web browser to:
-
-    http://myserver/vegadns-x.x/
-
-    The default admin login is email "test@test.com", password "test"
-
-    Next, you should edit "default_records" so that new domains have the proper
-    SOA record, and that they have name servers, etc.  Once this is done, you
-    can add or import a domain, then setup the data dumps in the next step.
-
-8.  To install the update-data.sh script (currently located in the root
-    directory of vegadns), you will need to first edit the VEGADNS variable to
-    point to the correct url.  You may also need to update the TINYDNSDIR
-    variable if you used something other than /etc/tinydns.
-
-    Try exectuting the update-data.sh shell script.  Once you confirm that
-    this is working correctly, move update-data.sh to /usr/local/sbin/ and then
-    add it to cron to run every 10 minutes or so, whatever is appropriate.
-    You'll an entry to your crontab like so:
-
-    # Update tinydns with VegaDNS data
-    */10 * * * * /usr/local/sbin/update-data.sh
-
-    NOTE: If intend to run update_data.sh from an IP other than 127.0.0.1, then
-    you will need to add that IP to $trusted_hosts in config.php
-
-    Done!
-
-    To report success:
-    % ( echo 'First M. Last'; echo `uname -a` ) | mail hostmaster@shupp.org
-
-
-NOTE ON AXFR
-
-    To use the Import domains via AXFR, you must first setup the remote host to
-    allow AXFR request from this machine.  Note that if your VegaDNS machine
-    has multiple IP addresses, that you allow AXFR from the same IP that the
-    outbound request is made.  Look in the logs of the remote server if you
-    are having problems connecting.
-
-NOTE on IPv6
-
-    IPv6 support is disabled by default.  To enable it, set $use_ipv6 to true in
-    src/config.php.  This will allow you to create AAAA records using the generic
-    record syntax.  You may also create automatic PTR records for your AAAA records
-    by choosing the AAAA+PTR record.  This will generate the matching PTR record
-    during export from the database.  Note that if you use AAAA+PTR, tinydns will
-    not respond to PTR requests unless you separately add SOA and NS records for the
-    ip6.arpa domain.
+9. Before exposure: run both test suites; run `php bin/admin.php check-export`;
+   compile its output with the actual deployed tinydns-data in an isolated directory;
+   test two tenants, a group admin and senior admin, reset delivery, logout/revocation,
+   AXFR/query allowlists and failure limits. Verify /src/config.php, /bin/admin.php,
+   /tests/router.php, /security-review/, /.git/config, /axfr_get.php and
+   /index.php/anything are unavailable. Verify the HTTPS cookie flags and headers,
+   and that failed downloads/compiler failures leave the served CDB unchanged.
