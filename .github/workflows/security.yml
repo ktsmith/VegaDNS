@@ -1,0 +1,38 @@
+name: Security regressions
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ['8.4', '8.5']
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: vegadns_test
+          MYSQL_USER: vegadns_test
+          MYSQL_PASSWORD: isolated-test-password
+          MYSQL_ROOT_PASSWORD: isolated-root-password
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -pisolated-root-password"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo_mysql, pdo_sqlite
+          coverage: none
+      - run: find src bin tests -name '*.php' -print0 | xargs -0 -n1 php -l
+      - run: php tests/security.php
+      - run: python3 tests/http_security.py php
+      - run: sh tests/publisher.sh
+      - run: php tests/security.php
+        env:
+          VEGADNS_TEST_DSN: 'mysql:host=127.0.0.1;dbname=vegadns_test;charset=utf8mb4'
+          VEGADNS_TEST_USER: vegadns_test
+          VEGADNS_TEST_PASSWORD: isolated-test-password

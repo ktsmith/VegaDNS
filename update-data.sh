@@ -1,54 +1,29 @@
 #!/bin/sh
-
-# The FULL path to the index.php file for the VegaDNS server
-VEGADNS='http://127.0.0.1/vegadns-x.x/index.php'
-
-# NOTE: You can get updates from multiple VegaDNS servers if 
-# desired. Simply separate them by spaces like so:
-# VEGADNS='http://server1/vegadns-x.x/index.php http://server2/vegadns-x.x/index.php'
-
-# Path to the tinydns directory
-TINYDNSDIR=/etc/tinydns
-
-CUR="$TINYDNSDIR/root/data"
-OLD="$TINYDNSDIR/root/data.old"
-NEW="$TINYDNSDIR/root/data.new"
-
-
-if [ -f "$CUR" ] ; then
-    cp $CUR $OLD
-fi
-
-if [ -f "$NEW" ] ; then
-    rm $NEW
-fi
-
-A=$[0]
-for VD in $VEGADNS ; do
-    A=$[$A+1]
-    if wget -q -O "$TINYDNSDIR/root/data.srv-$A" $VD?state=get_data ; then
-        if [ -s "$TINYDNSDIR/root/data.srv-$A" ] ; then
-            cat "$TINYDNSDIR/root/data.srv-$A" >>$NEW
-        else
-            echo "ERROR: $TINYDNSDIR/root/data.srv-$A does not have a size greater than zero" 1>&2
-            exit 1
-        fi
-    else
-        echo "ERROR: wget did not return 0 when accessing $VD?state=get_data" 1>&2
-        exit 1
-    fi
-    if [ -f "$TINYDNSDIR/root/data.srv-$A" ] ; then
-        rm "$TINYDNSDIR/root/data.srv-$A"
-    fi
-done
-
-# Don't run make if the files havn't changed
-OLDSUM=$(sum $OLD | awk '{ print $1 " " $2}')
-NEWSUM=$(sum $NEW | awk '{ print $1 " " $2}')
-
-if [ "$OLDSUM" != "$NEWSUM" ]; then
-    mv $NEW $CUR
-    (cd $TINYDNSDIR/root ; make -s)
-else
-    rm $NEW
-fi
+# Run on the tinydns host. The curl config contains the Bearer header, mode 0600.
+set -eu
+umask 077
+: "${VEGADNS_URL:?Set the canonical HTTPS URL ending in /index.php}"
+: "${VEGADNS_CURL_CONFIG:?Set the private curl configuration path}"
+: "${TINYDNS_ROOT:?Set the existing tinydns root directory}"
+TINYDNS_DATA=${TINYDNS_DATA:-/usr/local/bin/tinydns-data}
+case "$VEGADNS_URL" in https://*/index.php) ;; *) echo 'Invalid HTTPS application URL' >&2; exit 1 ;; esac
+case "$VEGADNS_URL" in *\?*|*\#*) echo 'URL must not contain query or fragment' >&2; exit 1 ;; esac
+test -r "$VEGADNS_CURL_CONFIG"
+test -d "$TINYDNS_ROOT"
+test -x "$TINYDNS_DATA"
+exec 9>"$TINYDNS_ROOT/.vegadns-publish.lock"
+flock -n 9 || exit 0
+stage=$(mktemp -d "$TINYDNS_ROOT/.vegadns.XXXXXXXX")
+cleanup() { rm -f "$stage/data" "$stage/data.cdb" "$stage/data.tmp"; rmdir "$stage"; }
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+curl --config "$VEGADNS_CURL_CONFIG" --proto '=https' --tlsv1.2 \
+    --fail --silent --show-error --max-time 60 \
+    --output "$stage/data" -- "$VEGADNS_URL?state=get_data"
+test -s "$stage/data" || { echo 'Refusing empty DNS export' >&2; exit 1; }
+(cd "$stage" && "$TINYDNS_DATA")
+test -s "$stage/data.cdb" || { echo 'DNS compiler produced no database' >&2; exit 1; }
+chmod 0644 "$stage/data" "$stage/data.cdb"
+# Compile first. Rename on the same filesystem atomically switches the served CDB.
+mv -f "$stage/data" "$TINYDNS_ROOT/data"
+mv -f "$stage/data.cdb" "$TINYDNS_ROOT/data.cdb"

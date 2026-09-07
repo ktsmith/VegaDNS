@@ -1,40 +1,32 @@
-OVERVIEW
+VegaDNS
+-------
 
-VegaDNS is a tinydns administration tool written in PHP to allow easy
-administration of DNS records through a web browser.
+VegaDNS manages tinydns zones, records, group defaults and accounts through a
+browser. Roles are user, group administrator and senior administrator. AXFR
+import is restricted to senior administrators and operator-approved DNS servers.
 
-FEATURES
+This security refactor requires PHP 8.4 or newer (8.x), PDO MySQL, MySQL with
+InnoDB/utf8mb4, and HTTPS. Rendering and IPv6 handling use native PHP; the vendored
+Smarty and Net_IPv6 libraries have been removed. composer.json declares platform
+requirements; there are no third-party PHP packages to install or resolve.
 
-* Tiered access with Senior Admin, Group Admin, and User levels
-* Import multiple domains at once via AXFR
-* Uses Smarty Template engine for clear separation of PHP from HTML
-* Web configurable Default Records to auto-populate new domains with
-* Free (GPL)
+Read INSTALL for a new deployment and UPGRADE before replacing a legacy instance.
+docs/security-fixes.md maps the security findings to controls and regression tests.
+Do not deploy a source checkout without the webserver access rules in INSTALL.
 
-REQUIREMENTS
+Tests (PHP needs PDO SQLite for the local test suite):
+    php tests/security.php
+    python3 tests/http_security.py php
+    sh tests/publisher.sh
 
-* PHP 5.1
-* MySQL
-* djbdns (http://cr.yp.to/djbdns.html)
-* ucspi-tcp (http://cr.yp.to/ucspi-tcp.html)
-* daemontools (http://cr.yp.to/daemontools/install.html)
-* wget (http://www.gnu.org/directory/wget.html)
+The optional MySQL test environment uses an EMPTY database named vegadns_test:
+    VEGADNS_TEST_DSN='mysql:host=127.0.0.1;dbname=vegadns_test;charset=utf8mb4'
+    VEGADNS_TEST_USER and VEGADNS_TEST_PASSWORD supply test-only credentials.
+    php tests/security.php
 
-INSTALL
-see INSTALL
+Run security.php in a fresh database each time. Tests never use production
+configuration. HTTP tests start a loopback-only disposable test server and exercise
+file and database session handlers; deployment TLS and DNS tools need separate
+acceptance checks. See deploy/ for representative webserver/runtime configuration.
 
-LICENSE
-See COPYING for a copy of the GPL v2, which covers all original code in
-VegaDNS.  Note that the src/Net/IPv6.php file is a library from PEAR,
-and is covered under the New BSD license.
-
-SUPPORT
-
-* Issue Tracking:
-    https://github.com/shupp/VegaDNS/issues
-* Google group for current support discussions:
-    http://groups.google.com/group/vegadns
-* Archive of old support email list (2009-2010):
-    http://sourceforge.net/mailarchive/forum.php?forum_name=vegadns-users
-* Archive of really old list (2003-2009):
-    http://www.mail-archive.com/users@vegadns.org/
+License: GPL v2; see COPYING. Original project credits remain in CREDITS.

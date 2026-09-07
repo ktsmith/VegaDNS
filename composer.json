@@ -1,0 +1,17 @@
+{
+  "name": "vegadns/vegadns",
+  "description": "VegaDNS native PHP administration for tinydns",
+  "type": "project",
+  "license": "GPL-2.0-only",
+  "require": {
+    "php": ">=8.3 <9.0",
+    "ext-pdo": "*",
+    "ext-pdo_mysql": "*",
+    "ext-session": "*",
+    "ext-filter": "*"
+  },
+  "scripts": {
+    "test": "php tests/security.php"
+  },
+  "config": {"allow-plugins": false}
+}

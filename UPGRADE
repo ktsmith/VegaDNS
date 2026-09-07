@@ -1,73 +1,59 @@
-** UPGRADING FROM 0.11.2 OR LOWER PLEASE READ **                  4/4/2013
+Security refactor upgrade
+=========================
 
-You SHOULD run the ALTER statements in records_update.sql:
+This is a runtime/schema/session migration, not a drop-in PHP 5 update. The legacy
+Smarty UI and includes are replaced by native PHP controllers, rendering and DNS
+conversion. Account/domain/record/default management, logs, AXFR, query and export
+remain; old template customization must be ported. Review INSTALL first.
 
-    mysql -u <user> -p<pass> <db_name> < records_update.sql
+1. Put the application and publisher in maintenance mode. Back up the complete
+   database, configuration and served data/data.cdb; test restoration. Install into
+   a NEW directory so deleted legacy helpers/templates do not survive deployment.
+   Preserve original application source separately for rollback, not in webroot.
 
-These provide even longer `val` columns for things like SPF/TXT records
+2. Test a sanitized database copy with PHP 8.4+ and your actual MySQL/DNS versions.
+   Review duplicate account emails and domain names case-insensitively; resolve
+   duplicates deliberately before migration. Resolve NULL/invalid host/value
+   fields, malformed names, out-of-zone owners, and TXT/SPF values over 255 bytes.
+   SQL migration intentionally does not invent replacements for invalid DNS data.
+   Review old MD5 accounts and require resets for dormant/privileged users.
 
+3. Configure the new environment and server rules from INSTALL. Run
+   `php bin/admin.php migrate` with a temporary DDL-capable identity while traffic
+   is stopped. It converts tables to InnoDB/utf8mb4, widens password/name/value
+   fields, adds missing SRV columns, adds unique email/domain indexes and new
+   security tables, and revokes sessions/reset tokens. MySQL DDL is not atomic:
+   on failure inspect the database and restore the backup before retrying if needed.
+   Old active_sessions/php_sessions are unused; remove them after successful
+   validation using your database retention procedure. Remove old session files.
+   The shipped test@test.com/test credential is disabled. Provision a named admin
+   using create-admin, or use `set-password EMAIL` with a private stdin password to
+   recover an existing account. A successful legacy MD5 login upgrades its hash;
+   new passwords/reset passwords use password_hash and password_verify.
 
-** UPGRADING FROM 0.9.10 OR LOWER PLEASE READ **                  3/20/2010
+4. Install the new publisher and Bearer credential before resuming publication.
+   Old get_data IP-trust and unauthenticated URLs no longer work. axfr_get.php is
+   retired; transfers run inside authenticated senior-admin requests with approved
+   destination IPs. Arbitrary DNS destinations and recursive-query mode are gone.
+   Imports validate the transferred records, reject unsupported/glue shorthand,
+   and preserve the transferred SOA/NS rather than applying legacy override flags.
+   Up to ten zones may be imported per request; each zone is committed separately.
+   If a later zone fails, inspect the domain list before retrying the remainder.
+   Query/transfer process limits are 20 seconds and 5 MiB each.
 
-You MUST run the ALTER statements in srv_support.sql:
+5. Old URL session bookmarks and GET mutation/credential requests are rejected.
+   Cookie sessions require HTTPS. All modifying forms require POST plus CSRF.
+   Existing sessions lose access on account deletion, deactivation, password/email
+   changes and role/group changes. Users must sign in again after such changes.
+   Group admins cannot inspect/manage accounts outside their own user group.
 
-    mysql -u <user> -p<pass> <db_name> < srv_support.sql
+6. Run all INSTALL acceptance checks. In particular, check export of existing data
+   before switching DNS publication: malformed rows now fail the whole export;
+   SOA deletion is blocked, each active zone needs exactly one SOA, and automatic
+   PTR needs matching reverse-zone ownership. Restore backups of both database
+   and old code/config to roll back; the legacy runtime should remain isolated.
 
-These provide additional columns for SRV records
-
-
-You SHOULD run the ALTER statements in records_update.sql:
-
-    mysql -u <user> -p<pass> <db_name> < records_update.sql
-
-These provide longer `val` columns for things like SPF/TXT records
-
-
-
-
-** UPGRADING FROM 0.9.8 OR LOWER PLEASE READ **                  2/4/2005
-
-The smarty core code has been moved.  You will need to remove the old templates
-to avoid errors by issuing:
-
-sudo rm /usr/local/apache/vegadns/templates_c/*
-
-
-
-
-** UPGRADING FROM 0.9b1 OR LOWER PLEASE READ **                 9/23/2004
-
-You should remove the "> /dev/null" from your cron entry of update-data.sh.
-update-data.sh now provides some errors, and you want to get them.
-
-
-
-
-
-** UPGRADING FROM 0.7 OR LOWER PLEASE READ **                   5/19/2004
-
-As of version 0.8, passwords are no longer stored as plain text, but rather as
-md5 hashes.  In order for your old passwords to work, you need to run the md5upgrade patch, which is located in the md5upgrade directory of your VegaDNS source.
-
-NOTE: The md5upgrade script was removed after 0.11.3.  Grab the 0.11.3 source if you still need this:
-https://github.com/shupp/VegaDNS/archive/0.11.3.zip
-
-To upgrade, just point your browser to:
-
-http://your-server/vegadns-x.x/md5upgrade/index.php
-
-(replacing your-server with your hostname, and x.x with your new version)
-
-This script will verify that your accounts table does not have the correct
-Password field length.  It will then provide you with an upgrade link.  When
-you follow  this link, the Password field length will be changed for the
-accounts table, and then each password will be replaced with the corresponding
-md5 hash.  Once this is complete, your users will be able to log in
-successfully.
-
-Also note that since passwords are no longer stored in clear text, if you
-forget your password, the system will generate a new one for you upon request.
-
-
-Bill Shupp
-hostmaster@shupp.org
+Historical logs may contain plaintext passwords and session URLs from the old
+version. Restrict/rotate those logs, investigate exposure and rotate affected
+credentials through your incident/retention procedures. This patch cannot remove
+copies already retained by proxies, backups or external logging services.
